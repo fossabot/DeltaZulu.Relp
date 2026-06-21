@@ -30,7 +30,7 @@ namespace Relp.Examples.Server
                 while (!cts.IsCancellationRequested)
                 {
                     var client = await listener.AcceptTcpClientAsync(cts.Token);
-                    _ = Task.Run(() => HandleClientAsync(client, cts.Token), cts.Token);
+                    _ = Task.Run(() => RunClientAsync(client, cts.Token), CancellationToken.None);
                 }
             }
             catch (OperationCanceledException) when (cts.IsCancellationRequested)
@@ -40,6 +40,22 @@ namespace Relp.Examples.Server
             finally
             {
                 listener.Stop();
+            }
+
+            static async Task RunClientAsync(TcpClient client, CancellationToken cancellationToken)
+            {
+                try
+                {
+                    await HandleClientAsync(client, cancellationToken);
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
+                    // Server shutdown requested.
+                }
+                catch (Exception exception) when (exception is IOException or SocketException or InvalidOperationException)
+                {
+                    Console.Error.WriteLine($"Client session ended unexpectedly: {exception.Message}");
+                }
             }
 
             static async Task HandleClientAsync(TcpClient client, CancellationToken cancellationToken)
@@ -65,7 +81,7 @@ namespace Relp.Examples.Server
                         var read = await stream.ReadAsync(buffer, cancellationToken);
                         if (read == 0)
                         {
-                            return;
+                            throw new IOException("Connection closed before the RELP session was closed.");
                         }
 
                         parser.Parse(buffer.AsSpan(0, read));
