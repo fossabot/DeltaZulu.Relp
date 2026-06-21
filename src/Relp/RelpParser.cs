@@ -64,18 +64,28 @@ public sealed class RelpParser
     {
         var span = _buffer.AsSpan(0, _count);
         var firstSpace = span.IndexOf((byte)' ');
-        if (firstSpace < 0) return;
+        if (firstSpace < 0)
+        {
+            return;
+        }
 
         var afterFirstSpace = firstSpace + 1;
         var secondSpaceOffset = span[afterFirstSpace..].IndexOf((byte)' ');
-        if (secondSpaceOffset < 0) return;
+        if (secondSpaceOffset < 0)
+        {
+            return;
+        }
+
         var secondSpace = afterFirstSpace + secondSpaceOffset;
 
         var afterSecondSpace = secondSpace + 1;
         var headerTail = span[afterSecondSpace..];
         var thirdSpaceOffset = headerTail.IndexOf((byte)' ');
         var newlineOffset = headerTail.IndexOf((byte)'\n');
-        if (thirdSpaceOffset < 0 && newlineOffset < 0) return;
+        if (thirdSpaceOffset < 0 && newlineOffset < 0)
+        {
+            return;
+        }
 
         var thirdSpace = thirdSpaceOffset < 0 ? -1 : afterSecondSpace + thirdSpaceOffset;
         var newline = newlineOffset < 0 ? -1 : afterSecondSpace + newlineOffset;

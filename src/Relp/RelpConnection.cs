@@ -125,7 +125,11 @@ public sealed class RelpConnection : IAsyncDisposable
             try
             {
                 var count = await stream.ReadAsync(buffer.AsMemory(0, buffer.Length), cancellationToken).ConfigureAwait(false);
-                if (count == 0) throw new IOException("Connection closed by the server.");
+                if (count == 0)
+                {
+                    throw new IOException("Connection closed by the server.");
+                }
+
                 return buffer.AsSpan(0, count).ToArray();
             }
             finally
@@ -166,7 +170,11 @@ public sealed class RelpConnection : IAsyncDisposable
         // Disposing the stream outside the connection lock lets a blocked read or
         // write unblock without DisposeAsync waiting forever on the send/receive
         // semaphores held by those operations.
-        if (stream is not null) await stream.DisposeAsync().ConfigureAwait(false);
+        if (stream is not null)
+        {
+            await stream.DisposeAsync().ConfigureAwait(false);
+        }
+
         client?.Dispose();
     }
 }

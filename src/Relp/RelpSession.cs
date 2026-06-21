@@ -28,7 +28,11 @@ public sealed class RelpSession
         await _transactionLock.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            if (IsActive) throw new InvalidOperationException("Session is already active.");
+            if (IsActive)
+            {
+                throw new InvalidOperationException("Session is already active.");
+            }
+
             var transactionId = _txId.Next();
             var openFrame = RelpFrameTx.FromCommandAndMessage(RelpCommand.Open, CreateOpenOffers());
             var response = await SendFrameAndExpectSuccessfulAckAsync(openFrame, transactionId, cancellationToken).ConfigureAwait(false);
@@ -53,7 +57,11 @@ public sealed class RelpSession
         await _transactionLock.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            if (!IsActive) return;
+            if (!IsActive)
+            {
+                return;
+            }
+
             var transactionId = _txId.Next();
             await SendFrameAndExpectSuccessfulAckAsync(RelpFrameTx.FromCommand(RelpCommand.Close), transactionId, cancellationToken).ConfigureAwait(false);
             IsActive = false;
@@ -70,7 +78,11 @@ public sealed class RelpSession
         await _transactionLock.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            if (!IsActive) throw new InvalidOperationException("Session is not active.");
+            if (!IsActive)
+            {
+                throw new InvalidOperationException("Session is not active.");
+            }
+
             var transactionId = _txId.Next();
             await SendFrameAndExpectSuccessfulAckAsync(RelpFrameTx.FromMessage(message), transactionId, cancellationToken).ConfigureAwait(false);
         }
