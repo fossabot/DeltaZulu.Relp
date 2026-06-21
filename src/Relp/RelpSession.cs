@@ -1,6 +1,5 @@
 using System.Reflection;
 using System.Text;
-using System.Threading.Channels;
 
 namespace Relp;
 
@@ -11,18 +10,17 @@ public sealed class RelpSession
     private readonly TxId _txId = new();
     private readonly RelpWindow _window = new();
     private readonly SemaphoreSlim _transactionLock = new(1, 1);
-    private byte[] _receiveRemainder = Array.Empty<byte>();
 
-    /// <summary>Provides a RELP API operation.</summary>
+    /// <summary>Initializes a single-flight RELP session over an open connection.</summary>
     public RelpSession(RelpConnection connection) => _connection = connection;
 
-    /// <summary>Gets a RELP API value.</summary>
+    /// <summary>Gets a value indicating whether the RELP session is open.</summary>
     public bool IsActive { get; private set; }
 
-    /// <summary>Gets a RELP API value.</summary>
+    /// <summary>Gets the count of transactions currently awaiting acknowledgements.</summary>
     public int PendingAcknowledgements => _window.Size;
 
-    /// <summary>Provides a RELP API operation.</summary>
+    /// <summary>Opens the RELP session and verifies that the server accepts RELP version 0.</summary>
     public async Task OpenAsync(CancellationToken cancellationToken = default)
     {
         await _transactionLock.WaitAsync(cancellationToken).ConfigureAwait(false);
@@ -51,7 +49,7 @@ public sealed class RelpSession
         }
     }
 
-    /// <summary>Provides a RELP API operation.</summary>
+    /// <summary>Closes the RELP session if it is active.</summary>
     public async Task CloseAsync(CancellationToken cancellationToken = default)
     {
         await _transactionLock.WaitAsync(cancellationToken).ConfigureAwait(false);
@@ -72,7 +70,7 @@ public sealed class RelpSession
         }
     }
 
-    /// <summary>Provides a RELP API operation.</summary>
+    /// <summary>Sends one syslog message and waits for its acknowledgement before returning.</summary>
     public async Task SendMessageAsync(byte[] message, CancellationToken cancellationToken = default)
     {
         await _transactionLock.WaitAsync(cancellationToken).ConfigureAwait(false);
@@ -92,38 +90,15 @@ public sealed class RelpSession
         }
     }
 
-    /// <summary>Provides a RELP API operation.</summary>
+    /// <summary>Sends messages sequentially in single-flight mode. Each message is acknowledged before the next is sent.</summary>
     public async Task SendMessagesAsync(IEnumerable<byte[]> messages, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(messages);
-        var channel = Channel.CreateBounded<byte[]>(new BoundedChannelOptions(capacity: 64) {
-            SingleReader = true,
-            SingleWriter = true,
-            FullMode = BoundedChannelFullMode.Wait
-        });
 
-        var producer = Task.Run(async () => {
-            try
-            {
-                foreach (var message in messages)
-                {
-                    await channel.Writer.WriteAsync(message, cancellationToken).ConfigureAwait(false);
-                }
-
-                channel.Writer.TryComplete();
-            }
-            catch (Exception exception)
-            {
-                channel.Writer.TryComplete(exception);
-            }
-        }, cancellationToken);
-
-        await foreach (var message in channel.Reader.ReadAllAsync(cancellationToken).ConfigureAwait(false))
+        foreach (var message in messages)
         {
             await SendMessageAsync(message, cancellationToken).ConfigureAwait(false);
         }
-
-        await producer.ConfigureAwait(false);
     }
 
     private async Task<RelpFrameRx> SendFrameAndExpectSuccessfulAckAsync(RelpFrameTx frame, int transactionId, CancellationToken cancellationToken)
@@ -131,7 +106,7 @@ public sealed class RelpSession
         _window.PutPending(transactionId, transactionId);
         try
         {
-            await _connection.SendAsync(frame.ToByteArray(transactionId), cancellationToken).ConfigureAwait(false);
+            await _connection.WriteFrameAsync(frame, transactionId, cancellationToken).ConfigureAwait(false);
             return await ExpectSuccessfulAckAsync(transactionId, cancellationToken).ConfigureAwait(false);
         }
         catch
@@ -161,28 +136,13 @@ public sealed class RelpSession
         }
     }
 
-    private async Task<RelpFrameRx> ReceiveFrameAsync(CancellationToken cancellationToken)
-    {
-        var parser = new RelpParser();
-        if (_receiveRemainder.Length > 0)
-        {
-            parser.Parse(_receiveRemainder);
-            _receiveRemainder = Array.Empty<byte>();
-        }
-
-        while (!parser.IsComplete)
-        {
-            parser.Parse(await _connection.ReceiveAsync(cancellationToken).ConfigureAwait(false));
-        }
-
-        _receiveRemainder = parser.RemainingBytes;
-        return parser.ToFrame();
-    }
+    private async Task<RelpFrameRx> ReceiveFrameAsync(CancellationToken cancellationToken) =>
+        await _connection.ReadFrameAsync(RelpParserOptions.Default, cancellationToken).ConfigureAwait(false);
 
     private static byte[] CreateOpenOffers()
     {
         var version = Assembly.GetExecutingAssembly().GetName().Version?.ToString() ?? "0.1.0";
-        return Encoding.UTF8.GetBytes($"relp_version=0\nrelp_software=pyrelp-dotnet,{version},https://github.com/zbalkan/pyrelp\ncommands=syslog");
+        return Encoding.UTF8.GetBytes($"relp_version=0\nrelp_software=RELP.Net,{version},https://github.com/zbalkan/RELP.Net\ncommands=syslog");
     }
 
     private static bool ResponseIncludesOffer(RelpFrameRx response, string offerName)

@@ -1,32 +1,57 @@
-using System.Buffers.Text;
+using System.Buffers;
 
 namespace Relp;
 
 /// <summary>Incremental parser for octet-counted RELP frames.</summary>
 public sealed class RelpParser
 {
+    /// <summary>The default maximum RELP header length, in bytes.</summary>
+    public const int DefaultMaxHeaderLength = RelpParserOptions.DefaultMaxHeaderLength;
+
+    /// <summary>The default maximum complete RELP frame length, in bytes.</summary>
+    public const int DefaultMaxFrameLength = RelpParserOptions.DefaultMaxFrameLength;
+
     private byte[] _buffer = Array.Empty<byte>();
     private int _count;
+    private readonly RelpParserOptions _options;
 
-    /// <summary>Gets a RELP API value.</summary>
+    /// <summary>Initializes a parser with bounded header and frame sizes.</summary>
+    public RelpParser(int maxFrameLength = DefaultMaxFrameLength, int maxHeaderLength = DefaultMaxHeaderLength)
+        : this(new RelpParserOptions(maxFrameLength, maxHeaderLength))
+    {
+    }
+
+    /// <summary>Initializes a parser with bounded header and frame sizes.</summary>
+    public RelpParser(RelpParserOptions options)
+    {
+        _options = options;
+    }
+
+    /// <summary>Gets the maximum accepted complete RELP frame length, in bytes.</summary>
+    public int MaxFrameLength => _options.MaxFrameLength;
+
+    /// <summary>Gets the maximum accepted RELP header length, in bytes.</summary>
+    public int MaxHeaderLength => _options.MaxHeaderLength;
+
+    /// <summary>Gets a value indicating whether a complete RELP frame has been parsed.</summary>
     public bool IsComplete { get; private set; }
 
-    /// <summary>Gets a RELP API value.</summary>
+    /// <summary>Gets the parsed transaction identifier.</summary>
     public int TransactionId { get; private set; }
 
-    /// <summary>Gets a RELP API value.</summary>
+    /// <summary>Gets the parsed RELP command.</summary>
     public RelpCommand Command { get; private set; }
 
-    /// <summary>Gets a RELP API value.</summary>
+    /// <summary>Gets the parsed payload length, in bytes.</summary>
     public int Length { get; private set; }
 
-    /// <summary>Provides a RELP API operation.</summary>
+    /// <summary>Gets a copy of the parsed payload bytes.</summary>
     public byte[] Data { get; private set; } = Array.Empty<byte>();
 
-    /// <summary>Provides a RELP API operation.</summary>
+    /// <summary>Gets bytes received after the completed frame.</summary>
     public byte[] RemainingBytes { get; private set; } = Array.Empty<byte>();
 
-    /// <summary>Provides a RELP API operation.</summary>
+    /// <summary>Appends one byte to the parser and attempts to complete a RELP frame.</summary>
     public void Parse(byte value)
     {
         Span<byte> single = stackalloc byte[1];
@@ -34,7 +59,7 @@ public sealed class RelpParser
         Parse(single);
     }
 
-    /// <summary>Provides a RELP API operation.</summary>
+    /// <summary>Appends bytes to the parser and attempts to complete a RELP frame.</summary>
     public void Parse(ReadOnlySpan<byte> bytes)
     {
         if (IsComplete)
@@ -42,14 +67,30 @@ public sealed class RelpParser
             throw new InvalidOperationException("Parser has already completed a RELP frame. Create a new parser for additional frames and pass RemainingBytes first.");
         }
 
+        if (bytes.Length > MaxFrameLength - _count)
+        {
+            throw new FormatException($"RELP frame exceeds the configured maximum frame length of {MaxFrameLength} bytes.");
+        }
+
         EnsureCapacity(_count + bytes.Length);
         bytes.CopyTo(_buffer.AsSpan(_count));
         _count += bytes.Length;
 
-        TryParseBufferedFrame();
+        var sequence = new ReadOnlySequence<byte>(_buffer, 0, _count);
+        if (!RelpFrameReader.TryReadFrame(ref sequence, _options, out var frame))
+        {
+            return;
+        }
+
+        TransactionId = frame.TransactionId;
+        Command = frame.Command;
+        Length = frame.Length;
+        Data = frame.Buffer;
+        RemainingBytes = sequence.ToArray();
+        IsComplete = true;
     }
 
-    /// <summary>Provides a RELP API operation.</summary>
+    /// <summary>Creates a received frame from the completed parser state.</summary>
     public RelpFrameRx ToFrame()
     {
         if (!IsComplete)
@@ -58,96 +99,6 @@ public sealed class RelpParser
         }
 
         return new RelpFrameRx(TransactionId, Command, Length, Data);
-    }
-
-    private void TryParseBufferedFrame()
-    {
-        var span = _buffer.AsSpan(0, _count);
-        var firstSpace = span.IndexOf((byte)' ');
-        if (firstSpace < 0)
-        {
-            return;
-        }
-
-        var afterFirstSpace = firstSpace + 1;
-        var secondSpaceOffset = span[afterFirstSpace..].IndexOf((byte)' ');
-        if (secondSpaceOffset < 0)
-        {
-            return;
-        }
-
-        var secondSpace = afterFirstSpace + secondSpaceOffset;
-
-        var afterSecondSpace = secondSpace + 1;
-        var headerTail = span[afterSecondSpace..];
-        var thirdSpaceOffset = headerTail.IndexOf((byte)' ');
-        var newlineOffset = headerTail.IndexOf((byte)'\n');
-        if (thirdSpaceOffset < 0 && newlineOffset < 0)
-        {
-            return;
-        }
-
-        var thirdSpace = thirdSpaceOffset < 0 ? -1 : afterSecondSpace + thirdSpaceOffset;
-        var newline = newlineOffset < 0 ? -1 : afterSecondSpace + newlineOffset;
-        if (newline >= 0 && (thirdSpace < 0 || newline < thirdSpace))
-        {
-            thirdSpace = -1;
-        }
-
-        if (!Utf8Parser.TryParse(span[..firstSpace], out int transactionId, out var consumed) ||
-            consumed != firstSpace ||
-            transactionId is < TxId.MinValue or > TxId.MaxValue)
-        {
-            throw new FormatException($"RELP transaction id must be between {TxId.MinValue} and {TxId.MaxValue}.");
-        }
-
-        if (!RelpCommandExtensions.TryParseProtocolSpan(span.Slice(afterFirstSpace, secondSpace - afterFirstSpace), out var command))
-        {
-            throw new FormatException("Invalid RELP command.");
-        }
-
-        var lengthEnd = thirdSpace < 0 ? newline : thirdSpace;
-        if (!Utf8Parser.TryParse(span.Slice(afterSecondSpace, lengthEnd - afterSecondSpace), out int length, out consumed) ||
-            consumed != lengthEnd - afterSecondSpace ||
-            length < 0)
-        {
-            throw new FormatException("Negative or invalid payload length.");
-        }
-
-        if (thirdSpace < 0)
-        {
-            if (length != 0)
-            {
-                throw new FormatException("Non-empty RELP frame is missing the payload separator.");
-            }
-
-            Complete(transactionId, command, length, ReadOnlySpan<byte>.Empty, newline + 1);
-            return;
-        }
-
-        var dataStart = thirdSpace + 1;
-        var frameEnd = dataStart + length;
-        if (_count <= frameEnd)
-        {
-            return;
-        }
-
-        if (_buffer[frameEnd] != (byte)'\n')
-        {
-            throw new FormatException("RELP frame is not terminated after the declared payload length.");
-        }
-
-        Complete(transactionId, command, length, span.Slice(dataStart, length), frameEnd + 1);
-    }
-
-    private void Complete(int transactionId, RelpCommand command, int length, ReadOnlySpan<byte> data, int remainderStart)
-    {
-        TransactionId = transactionId;
-        Command = command;
-        Length = length;
-        Data = data.ToArray();
-        RemainingBytes = _buffer.AsSpan(remainderStart, _count - remainderStart).ToArray();
-        IsComplete = true;
     }
 
     private void EnsureCapacity(int needed)

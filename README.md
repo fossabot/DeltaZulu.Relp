@@ -20,7 +20,7 @@ library, tests, and example projects.
 
 ## Requirements
 
-- .NET SDK that supports `net10.0`.
+- .NET SDK that supports `net10.0`. The package targets `net10.0` while the project is experimental; consider multi-targeting a long-term support framework before operational adoption.
 - Network access to restore NuGet packages for tests and examples.
 
 The example projects use
@@ -57,12 +57,22 @@ await session.CloseAsync();
 
 `RelpSession` sends one frame at a time and waits for a successful `rsp 200`
 acknowledgement before continuing. Transaction identifiers follow the RELP
-protocol range of `1` through `999999999`.
+protocol range of `1` through `999999999`. The lower-level `RelpFrameReader`
+can parse a `ReadOnlySequence<byte>` directly, and `RelpConnection.ReadFrameAsync`
+uses a `PipeReader` so receive-side buffering is owned by the transport layer.
+Inbound payloads are still copied into `RelpFrameRx` byte arrays so they remain
+safe after the pipe advances; this is appropriate for small acknowledgements,
+while future server-side ingestion can add a callback parser for zero-copy
+processing of large syslog payloads.
 
 ## Examples
 
 The examples demonstrate zstd-compressed newline-delimited JSON (NDJSON/JSON
-Lines) sent in RELP `syslog` frames.
+Lines) sent in RELP `syslog` frames. RELP.Net currently uses a
+single-flight session model: it sends one frame and waits for its `rsp 200`
+acknowledgement before sending the next frame. The parser also fails closed when
+a frame exceeds the configured maximum frame length (1 MiB by default) or a
+header exceeds the configured maximum header length (4 KiB by default).
 
 Start the server:
 
@@ -80,7 +90,7 @@ The client arguments are:
 
 1. server host, default `127.0.0.1`
 2. server port, default `1601`
-3. message count, default `5`
+3. message count, default `5.000.000`
 
 The server binds to loopback by default for local demonstration. Pass a second
 argument of `any` to bind to all interfaces:

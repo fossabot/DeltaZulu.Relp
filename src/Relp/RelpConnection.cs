@@ -1,4 +1,5 @@
 using System.Buffers;
+using System.IO.Pipelines;
 using System.Net.Security;
 using System.Net.Sockets;
 using System.Security.Cryptography.X509Certificates;
@@ -13,6 +14,8 @@ public sealed class RelpConnection : IAsyncDisposable
     private readonly SemaphoreSlim _receiveLock = new(1, 1);
     private TcpClient? _client;
     private Stream? _stream;
+    private PipeReader? _reader;
+    private PipeWriter? _writer;
     private bool _disposed;
 
     /// <summary>Provides a RELP API operation.</summary>
@@ -76,6 +79,8 @@ public sealed class RelpConnection : IAsyncDisposable
 
                 _client = client;
                 _stream = stream;
+                _reader = PipeReader.Create(stream, new StreamPipeReaderOptions(leaveOpen: true));
+                _writer = PipeWriter.Create(stream, new StreamPipeWriterOptions(leaveOpen: true));
             }
             catch
             {
@@ -103,13 +108,38 @@ public sealed class RelpConnection : IAsyncDisposable
         try
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
-            var stream = _stream ?? throw new InvalidOperationException("Connection is not open.");
-            await stream.WriteAsync(message, cancellationToken).ConfigureAwait(false);
-            await stream.FlushAsync(cancellationToken).ConfigureAwait(false);
+            var writer = _writer ?? throw new InvalidOperationException("Connection is not open.");
+            await writer.WriteAsync(message, cancellationToken).ConfigureAwait(false);
+            await writer.FlushAsync(cancellationToken).ConfigureAwait(false);
         }
         finally
         {
             _sendLock.Release();
+        }
+    }
+
+    /// <summary>Writes one RELP frame to the connection.</summary>
+    public async ValueTask WriteFrameAsync(RelpFrameTx frame, int transactionId, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(frame);
+        await SendAsync(frame.ToByteArray(transactionId), cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>Reads one complete RELP frame from the connection.</summary>
+    public async ValueTask<RelpFrameRx> ReadFrameAsync(
+        RelpParserOptions options,
+        CancellationToken cancellationToken = default)
+    {
+        await _receiveLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            var reader = _reader ?? throw new InvalidOperationException("Connection is not open.");
+            return await RelpFrameReader.ReadFrameAsync(reader, options, cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            _receiveLock.Release();
         }
     }
 
@@ -149,6 +179,8 @@ public sealed class RelpConnection : IAsyncDisposable
         await _connectLock.WaitAsync().ConfigureAwait(false);
         Stream? stream;
         TcpClient? client;
+        PipeReader? reader;
+        PipeWriter? writer;
         try
         {
             if (_disposed)
@@ -159,12 +191,26 @@ public sealed class RelpConnection : IAsyncDisposable
             _disposed = true;
             stream = _stream;
             client = _client;
+            reader = _reader;
+            writer = _writer;
             _stream = null;
             _client = null;
+            _reader = null;
+            _writer = null;
         }
         finally
         {
             _connectLock.Release();
+        }
+
+        if (reader is not null)
+        {
+            await reader.CompleteAsync().ConfigureAwait(false);
+        }
+
+        if (writer is not null)
+        {
+            await writer.CompleteAsync().ConfigureAwait(false);
         }
 
         // Disposing the stream outside the connection lock lets a blocked read or

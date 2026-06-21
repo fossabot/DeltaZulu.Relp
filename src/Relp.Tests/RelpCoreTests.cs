@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Collections.Concurrent;
 using System.Net;
 using System.Net.Sockets;
@@ -82,6 +83,44 @@ public sealed class RelpCoreTests
     {
         var parser = new RelpParser();
         Assert.ThrowsExactly<FormatException>(() => parser.Parse(Encoding.UTF8.GetBytes("2 rsp 5 200 OK\n")));
+    }
+
+    [TestMethod]
+    public void ParserRejectsOversizedHeadersAndFrames()
+    {
+        Assert.ThrowsExactly<ArgumentOutOfRangeException>(() => new RelpParser(maxFrameLength: 8, maxHeaderLength: 9));
+
+        var unterminatedHeader = new RelpParser(maxFrameLength: 32, maxHeaderLength: 8);
+        Assert.ThrowsExactly<FormatException>(() => unterminatedHeader.Parse(Encoding.UTF8.GetBytes("123456789")));
+
+        var completeHeader = new RelpParser(maxFrameLength: 32, maxHeaderLength: 8);
+        Assert.ThrowsExactly<FormatException>(() => completeHeader.Parse(Encoding.UTF8.GetBytes("1 syslog 1 x\n")));
+
+        var oversizedFrame = new RelpParser(maxFrameLength: 12, maxHeaderLength: 12);
+        Assert.ThrowsExactly<FormatException>(() => oversizedFrame.Parse(Encoding.UTF8.GetBytes("1 syslog 2 xy\n")));
+    }
+
+
+    [TestMethod]
+    public void FrameReaderConsumesCompleteFrameAndLeavesRemainder()
+    {
+        var buffer = new ReadOnlySequence<byte>(Encoding.UTF8.GetBytes("2 rsp 6 200 OK\n3 rsp 6 200 OK\n"));
+
+        Assert.IsTrue(RelpFrameReader.TryReadFrame(ref buffer, RelpParserOptions.Default, out var frame));
+
+        Assert.AreEqual(2, frame.TransactionId);
+        Assert.AreEqual(RelpCommand.Response, frame.Command);
+        Assert.AreEqual("200 OK", frame.GetData());
+        Assert.AreEqual("3 rsp 6 200 OK\n", Encoding.UTF8.GetString(buffer.ToArray()));
+    }
+
+    [TestMethod]
+    public void FrameReaderWaitsForIncompletePayload()
+    {
+        var buffer = new ReadOnlySequence<byte>(Encoding.UTF8.GetBytes("2 rsp 6 200"));
+
+        Assert.IsFalse(RelpFrameReader.TryReadFrame(ref buffer, RelpParserOptions.Default, out _));
+        Assert.AreEqual("2 rsp 6 200", Encoding.UTF8.GetString(buffer.ToArray()));
     }
 
     [TestMethod]
