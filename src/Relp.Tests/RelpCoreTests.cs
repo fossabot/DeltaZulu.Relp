@@ -212,11 +212,11 @@ public sealed class RelpCoreTests
     public async Task ConnectionRejectsUseAfterDispose()
     {
         await using var connection = new RelpConnection("localhost", 601);
+        var cts = new CancellationTokenSource();
         await connection.DisposeAsync();
 
-        await Assert.ThrowsExactlyAsync<ObjectDisposedException>(() => connection.ConnectAsync());
-        await Assert.ThrowsExactlyAsync<ObjectDisposedException>(() => connection.SendAsync([]));
-        await Assert.ThrowsExactlyAsync<ObjectDisposedException>(() => connection.ReceiveAsync());
+        await Assert.ThrowsExactlyAsync<ObjectDisposedException>(() => connection.ConnectAsync(cts.Token));
+        await Assert.ThrowsExactlyAsync<ObjectDisposedException>(() => connection.SendAsync([], cts.Token));
     }
 
     [TestMethod]
@@ -423,6 +423,175 @@ public sealed class RelpCoreTests
         await using var connection = new RelpConnection(IPAddress.Loopback.ToString(), port);
 
         await Assert.ThrowsExactlyAsync<SocketException>(() => connection.ConnectAsync(timeout.Token));
+    }
+    [TestMethod]
+    public void CommandProtocolStringsRoundTripAndRejectUnknownValues()
+    {
+        var expected = new Dictionary<RelpCommand, string> {
+            [RelpCommand.Open] = "open",
+            [RelpCommand.Close] = "close",
+            [RelpCommand.Abort] = "abort",
+            [RelpCommand.ServerClose] = "serverclose",
+            [RelpCommand.Syslog] = "syslog",
+            [RelpCommand.Response] = "rsp"
+        };
+
+        foreach (var (command, protocolName) in expected)
+        {
+            Assert.AreEqual(protocolName, command.ToProtocolString());
+            Assert.IsTrue(RelpCommandExtensions.TryParseProtocolString(protocolName, out var parsed));
+            Assert.AreEqual(command, parsed);
+        }
+
+        Assert.IsFalse(RelpCommandExtensions.TryParseProtocolString("unknown", out _));
+        Assert.ThrowsExactly<ArgumentOutOfRangeException>(() => ((RelpCommand)999).ToProtocolString());
+    }
+
+    [TestMethod]
+    public void ParserHandlesFragmentedHeaderAndPayload()
+    {
+        var parser = new RelpParser();
+
+        foreach (var value in Encoding.UTF8.GetBytes("9 syslog 5 hello\n"))
+        {
+            parser.Parse(value);
+        }
+
+        Assert.IsTrue(parser.IsComplete);
+        Assert.AreEqual(9, parser.TransactionId);
+        Assert.AreEqual(RelpCommand.Syslog, parser.Command);
+        Assert.AreEqual(5, parser.Length);
+        Assert.AreEqual("hello", Encoding.UTF8.GetString(parser.Data));
+    }
+
+    [TestMethod]
+    public void ParserRejectsMalformedHeadersAndInvalidLengths()
+    {
+        Assert.ThrowsExactly<FormatException>(() => new RelpParser().Parse(Encoding.UTF8.GetBytes("abc rsp 6 200 OK\n")));
+        Assert.ThrowsExactly<FormatException>(() => new RelpParser().Parse(Encoding.UTF8.GetBytes("1 nope 6 200 OK\n")));
+        Assert.ThrowsExactly<FormatException>(() => new RelpParser().Parse(Encoding.UTF8.GetBytes("1 rsp -1 \n")));
+        Assert.ThrowsExactly<FormatException>(() => new RelpParser().Parse(Encoding.UTF8.GetBytes("1 rsp nope 200 OK\n")));
+        Assert.ThrowsExactly<FormatException>(() => new RelpParser().Parse(Encoding.UTF8.GetBytes("1 rsp 1\n")));
+    }
+
+    [TestMethod]
+    public void ParserToFrameRequiresCompletedFrame()
+    {
+        var parser = new RelpParser();
+
+        Assert.ThrowsExactly<InvalidOperationException>(() => parser.ToFrame());
+    }
+
+    [TestMethod]
+    public void FrameRxHandlesNullBuffersAndResponseCodeBoundaries()
+    {
+        Assert.ThrowsExactly<ArgumentNullException>(() => new RelpFrameRx(1, RelpCommand.Response, 0, null!));
+        Assert.AreEqual(100, new RelpFrameRx(1, RelpCommand.Response, 7, Encoding.UTF8.GetBytes(" 100 OK")).GetResponseCode());
+        Assert.AreEqual(999, new RelpFrameRx(1, RelpCommand.Response, 7, Encoding.UTF8.GetBytes("999 max")).GetResponseCode());
+        Assert.ThrowsExactly<FormatException>(() => new RelpFrameRx(1, RelpCommand.Response, 6, Encoding.UTF8.GetBytes("99 low")).GetResponseCode());
+        Assert.ThrowsExactly<FormatException>(() => new RelpFrameRx(1, RelpCommand.Response, 8, Encoding.UTF8.GetBytes("1000 max")).GetResponseCode());
+        Assert.ThrowsExactly<FormatException>(() => new RelpFrameRx(1, RelpCommand.Response, 0, []).GetResponseCode());
+    }
+
+    [TestMethod]
+    public void FrameTxTreatsNullMessageAsEmptyPayload()
+    {
+        var frame = new RelpFrameTx(RelpCommand.Abort, null);
+
+        Assert.IsEmpty(frame.Message);
+        Assert.AreEqual("3 abort 0", frame.ToProtocolString(3));
+    }
+
+    [TestMethod]
+    public void TxIdParsingComparisonAndNullOperatorsRejectInvalidInputs()
+    {
+        Assert.AreEqual(TxId.MinValue, TxId.Parse(TxId.MinValue.ToString()).Value);
+        Assert.AreEqual(TxId.MaxValue, TxId.Parse(TxId.MaxValue.ToString()).Value);
+        Assert.IsFalse(TxId.TryParse(null, out _));
+        Assert.IsFalse(TxId.TryParse("", out _));
+        Assert.IsFalse(TxId.TryParse((TxId.MaxValue + 1).ToString(), out _));
+        Assert.ThrowsExactly<FormatException>(() => TxId.Parse("not-a-number"));
+        Assert.ThrowsExactly<ArgumentException>(() => new TxId(1).CompareTo("1"));
+        Assert.ThrowsExactly<ArgumentNullException>(() => { TxId txId = null!; _ = txId + 1; });
+        Assert.ThrowsExactly<ArgumentNullException>(() => { TxId txId = null!; int _ = txId; });
+    }
+
+    [TestMethod]
+    public void WindowRemovalIsIdempotentAndMissingPendingReturnsNull()
+    {
+        var window = new RelpWindow();
+
+        Assert.IsFalse(window.IsPending(123));
+        Assert.IsNull(window.GetPending(123));
+        window.RemovePending(123);
+        window.PutPending(123, 456);
+        window.PutPending(123, 789);
+        Assert.AreEqual(789, window.GetPending(123));
+        window.RemovePending(123);
+        window.RemovePending(123);
+
+        Assert.AreEqual(0, window.Size);
+        Assert.IsFalse(window.IsPending(123));
+    }
+
+    [TestMethod]
+    public void BatchTracksRequestsResponsesAndVerificationStates()
+    {
+        var batch = new RelpBatch();
+        var success = new RelpFrameRx(1, RelpCommand.Response, 6, Encoding.UTF8.GetBytes("200 OK"));
+        var failure = new RelpFrameRx(2, RelpCommand.Response, 12, Encoding.UTF8.GetBytes("500 failure"));
+
+        var first = batch.Insert(Encoding.UTF8.GetBytes("first"));
+        var second = batch.PutRequest(RelpFrameTx.FromMessage(Encoding.UTF8.GetBytes("second")));
+
+        CollectionAssert.AreEquivalent(new[] { first, second }, batch.WorkQueue.ToArray());
+        Assert.AreEqual(RelpCommand.Syslog, batch.GetRequest(first)!.Command);
+        Assert.IsNull(batch.GetResponse(first));
+        Assert.IsFalse(batch.VerifyTransaction(first));
+        Assert.IsFalse(batch.VerifyAllTransactions());
+
+        batch.PutResponse(999, success);
+        Assert.IsNull(batch.GetResponse(999));
+
+        batch.PutResponse(first, success);
+        batch.PutResponse(second, failure);
+        Assert.IsTrue(batch.VerifyTransaction(first));
+        Assert.IsFalse(batch.VerifyTransaction(second));
+        Assert.IsFalse(batch.VerifyAllTransactions());
+
+        batch.RemoveRequest(first);
+        Assert.IsNull(batch.GetRequest(first));
+        Assert.DoesNotContain(first, batch.WorkQueue);
+        Assert.IsNotNull(batch.GetResponse(first));
+
+        batch.RemoveTransaction(first);
+        batch.RemoveTransaction(second);
+        Assert.IsNull(batch.GetResponse(first));
+        Assert.IsNull(batch.GetRequest(second));
+        Assert.IsEmpty(batch.WorkQueue);
+        Assert.IsTrue(batch.VerifyAllTransactions());
+    }
+
+    [TestMethod]
+    public async Task ConnectionExposesConstructorStateAndRejectsNullSendBeforeOpening()
+    {
+        var certificates = new System.Security.Cryptography.X509Certificates.X509CertificateCollection();
+        var connection = new RelpConnection("localhost", 6514, useTls: true, certificates);
+        var cts = new CancellationTokenSource();
+
+        Assert.AreEqual("localhost", connection.Host);
+        Assert.AreEqual(6514, connection.Port);
+        Assert.IsTrue(connection.UseTls);
+        Assert.AreSame(certificates, connection.ClientCertificates);
+        await Assert.ThrowsExactlyAsync<ArgumentNullException>(() => connection.SendAsync(null!, cts.Token));
+        await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => connection.SendAsync([], cts.Token));
+        await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => connection.ReceiveAsync(cts.Token));
+        await connection.DisposeAsync();
+        await connection.DisposeAsync();
+        foreach (var item in certificates)
+        {
+            item.Dispose();
+        }
     }
 
     private static async Task RunSingleClientRelpServerAsync(
