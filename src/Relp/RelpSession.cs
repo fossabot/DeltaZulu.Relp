@@ -1,5 +1,6 @@
 using System.Reflection;
 using System.Text;
+using System.Threading.Channels;
 
 namespace Relp;
 
@@ -77,6 +78,40 @@ public sealed class RelpSession
         {
             _transactionLock.Release();
         }
+    }
+
+    /// <summary>Provides a RELP API operation.</summary>
+    public async Task SendMessagesAsync(IEnumerable<byte[]> messages, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(messages);
+        var channel = Channel.CreateBounded<byte[]>(new BoundedChannelOptions(capacity: 64) {
+            SingleReader = true,
+            SingleWriter = true,
+            FullMode = BoundedChannelFullMode.Wait
+        });
+
+        var producer = Task.Run(async () => {
+            try
+            {
+                foreach (var message in messages)
+                {
+                    await channel.Writer.WriteAsync(message, cancellationToken).ConfigureAwait(false);
+                }
+
+                channel.Writer.TryComplete();
+            }
+            catch (Exception exception)
+            {
+                channel.Writer.TryComplete(exception);
+            }
+        }, cancellationToken);
+
+        await foreach (var message in channel.Reader.ReadAllAsync(cancellationToken).ConfigureAwait(false))
+        {
+            await SendMessageAsync(message, cancellationToken).ConfigureAwait(false);
+        }
+
+        await producer.ConfigureAwait(false);
     }
 
     private async Task<RelpFrameRx> SendFrameAndExpectSuccessfulAckAsync(RelpFrameTx frame, int transactionId, CancellationToken cancellationToken)

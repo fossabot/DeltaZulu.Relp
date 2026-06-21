@@ -1,3 +1,4 @@
+using System.Buffers.Text;
 using System.Text;
 
 namespace Relp;
@@ -37,13 +38,31 @@ public sealed class RelpFrameTx
             throw new ArgumentOutOfRangeException(nameof(transactionId), $"RELP transaction id must be between {TxId.MinValue} and {TxId.MaxValue}.");
         }
 
-        var header = Encoding.ASCII.GetBytes($"{transactionId} {Command.ToProtocolString()} {_message.Length}");
-        if (_message.Length == 0)
+        var command = Command.ToProtocolString();
+        var transactionDigits = CountDigits(transactionId);
+        var lengthDigits = CountDigits(_message.Length);
+        var payloadSeparatorLength = _message.Length == 0 ? 0 : 1;
+        var result = new byte[transactionDigits + 1 + command.Length + 1 + lengthDigits + payloadSeparatorLength + _message.Length + 1];
+        var destination = result.AsSpan();
+        var offset = 0;
+
+        Utf8Formatter.TryFormat(transactionId, destination[offset..], out var written);
+        offset += written;
+        destination[offset++] = (byte)' ';
+        offset += Encoding.ASCII.GetBytes(command, destination[offset..]);
+        destination[offset++] = (byte)' ';
+        Utf8Formatter.TryFormat(_message.Length, destination[offset..], out written);
+        offset += written;
+
+        if (_message.Length > 0)
         {
-            return [.. header, (byte)'\n'];
+            destination[offset++] = (byte)' ';
+            _message.CopyTo(destination[offset..]);
+            offset += _message.Length;
         }
 
-        return [.. header, (byte)' ', .. _message, (byte)'\n'];
+        destination[offset] = (byte)'\n';
+        return result;
     }
 
     /// <summary>Provides a RELP API operation.</summary>
@@ -51,5 +70,17 @@ public sealed class RelpFrameTx
     {
         var frame = ToByteArray(transactionId);
         return Encoding.UTF8.GetString(frame, 0, frame.Length - 1);
+    }
+
+    private static int CountDigits(int value)
+    {
+        var digits = 1;
+        while (value >= 10)
+        {
+            value /= 10;
+            digits++;
+        }
+
+        return digits;
     }
 }

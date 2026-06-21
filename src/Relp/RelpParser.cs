@@ -1,11 +1,12 @@
-using System.Text;
+using System.Buffers.Text;
 
 namespace Relp;
 
 /// <summary>Incremental parser for octet-counted RELP frames.</summary>
 public sealed class RelpParser
 {
-    private readonly List<byte> _buffer = [];
+    private byte[] _buffer = Array.Empty<byte>();
+    private int _count;
 
     /// <summary>Gets a RELP API value.</summary>
     public bool IsComplete { get; private set; }
@@ -26,7 +27,12 @@ public sealed class RelpParser
     public byte[] RemainingBytes { get; private set; } = Array.Empty<byte>();
 
     /// <summary>Provides a RELP API operation.</summary>
-    public void Parse(byte value) => Parse([value]);
+    public void Parse(byte value)
+    {
+        Span<byte> single = stackalloc byte[1];
+        single[0] = value;
+        Parse(single);
+    }
 
     /// <summary>Provides a RELP API operation.</summary>
     public void Parse(ReadOnlySpan<byte> bytes)
@@ -36,10 +42,9 @@ public sealed class RelpParser
             throw new InvalidOperationException("Parser has already completed a RELP frame. Create a new parser for additional frames and pass RemainingBytes first.");
         }
 
-        foreach (var value in bytes)
-        {
-            _buffer.Add(value);
-        }
+        EnsureCapacity(_count + bytes.Length);
+        bytes.CopyTo(_buffer.AsSpan(_count));
+        _count += bytes.Length;
 
         TryParseBufferedFrame();
     }
@@ -57,35 +62,44 @@ public sealed class RelpParser
 
     private void TryParseBufferedFrame()
     {
-        var firstSpace = IndexOfSpace(0);
+        var span = _buffer.AsSpan(0, _count);
+        var firstSpace = span.IndexOf((byte)' ');
         if (firstSpace < 0) return;
 
-        var secondSpace = IndexOfSpace(firstSpace + 1);
-        if (secondSpace < 0) return;
+        var afterFirstSpace = firstSpace + 1;
+        var secondSpaceOffset = span[afterFirstSpace..].IndexOf((byte)' ');
+        if (secondSpaceOffset < 0) return;
+        var secondSpace = afterFirstSpace + secondSpaceOffset;
 
-        var thirdSpace = IndexOfSpace(secondSpace + 1);
-        var newline = IndexOfNewline(secondSpace + 1);
-        if (thirdSpace < 0 && newline < 0) return;
+        var afterSecondSpace = secondSpace + 1;
+        var headerTail = span[afterSecondSpace..];
+        var thirdSpaceOffset = headerTail.IndexOf((byte)' ');
+        var newlineOffset = headerTail.IndexOf((byte)'\n');
+        if (thirdSpaceOffset < 0 && newlineOffset < 0) return;
+
+        var thirdSpace = thirdSpaceOffset < 0 ? -1 : afterSecondSpace + thirdSpaceOffset;
+        var newline = newlineOffset < 0 ? -1 : afterSecondSpace + newlineOffset;
         if (newline >= 0 && (thirdSpace < 0 || newline < thirdSpace))
         {
             thirdSpace = -1;
         }
 
-        var transactionText = Encoding.ASCII.GetString(_buffer.GetRange(0, firstSpace).ToArray());
-        if (!int.TryParse(transactionText, out var transactionId) || transactionId < TxId.MinValue || transactionId > TxId.MaxValue)
+        if (!Utf8Parser.TryParse(span[..firstSpace], out int transactionId, out var consumed) ||
+            consumed != firstSpace ||
+            transactionId is < TxId.MinValue or > TxId.MaxValue)
         {
             throw new FormatException($"RELP transaction id must be between {TxId.MinValue} and {TxId.MaxValue}.");
         }
 
-        var commandText = Encoding.ASCII.GetString(_buffer.GetRange(firstSpace + 1, secondSpace - firstSpace - 1).ToArray());
-        if (!RelpCommandExtensions.TryParseProtocolString(commandText, out var command))
+        if (!RelpCommandExtensions.TryParseProtocolSpan(span.Slice(afterFirstSpace, secondSpace - afterFirstSpace), out var command))
         {
             throw new FormatException("Invalid RELP command.");
         }
 
         var lengthEnd = thirdSpace < 0 ? newline : thirdSpace;
-        var lengthText = Encoding.ASCII.GetString(_buffer.GetRange(secondSpace + 1, lengthEnd - secondSpace - 1).ToArray());
-        if (!int.TryParse(lengthText, out var length) || length < 0)
+        if (!Utf8Parser.TryParse(span.Slice(afterSecondSpace, lengthEnd - afterSecondSpace), out int length, out consumed) ||
+            consumed != lengthEnd - afterSecondSpace ||
+            length < 0)
         {
             throw new FormatException("Negative or invalid payload length.");
         }
@@ -97,18 +111,13 @@ public sealed class RelpParser
                 throw new FormatException("Non-empty RELP frame is missing the payload separator.");
             }
 
-            TransactionId = transactionId;
-            Command = command;
-            Length = length;
-            Data = Array.Empty<byte>();
-            RemainingBytes = _buffer.Skip(newline + 1).ToArray();
-            IsComplete = true;
+            Complete(transactionId, command, length, ReadOnlySpan<byte>.Empty, newline + 1);
             return;
         }
 
         var dataStart = thirdSpace + 1;
         var frameEnd = dataStart + length;
-        if (_buffer.Count <= frameEnd)
+        if (_count <= frameEnd)
         {
             return;
         }
@@ -118,28 +127,27 @@ public sealed class RelpParser
             throw new FormatException("RELP frame is not terminated after the declared payload length.");
         }
 
+        Complete(transactionId, command, length, span.Slice(dataStart, length), frameEnd + 1);
+    }
+
+    private void Complete(int transactionId, RelpCommand command, int length, ReadOnlySpan<byte> data, int remainderStart)
+    {
         TransactionId = transactionId;
         Command = command;
         Length = length;
-        Data = _buffer.GetRange(dataStart, length).ToArray();
-        RemainingBytes = _buffer.Skip(frameEnd + 1).ToArray();
+        Data = data.ToArray();
+        RemainingBytes = _buffer.AsSpan(remainderStart, _count - remainderStart).ToArray();
         IsComplete = true;
     }
 
-    private int IndexOfSpace(int start) => IndexOfByte((byte)' ', start);
-
-    private int IndexOfNewline(int start) => IndexOfByte((byte)'\n', start);
-
-    private int IndexOfByte(byte value, int start)
+    private void EnsureCapacity(int needed)
     {
-        for (var index = start; index < _buffer.Count; index++)
+        if (_buffer.Length >= needed)
         {
-            if (_buffer[index] == value)
-            {
-                return index;
-            }
+            return;
         }
 
-        return -1;
+        var newSize = Math.Max(needed, _buffer.Length == 0 ? 256 : _buffer.Length * 2);
+        Array.Resize(ref _buffer, newSize);
     }
 }

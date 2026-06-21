@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Net.Security;
 using System.Net.Sockets;
 using System.Security.Cryptography.X509Certificates;
@@ -92,6 +93,12 @@ public sealed class RelpConnection : IAsyncDisposable
     public async Task SendAsync(byte[] message, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(message);
+        await SendAsync(message.AsMemory(), cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>Provides a RELP API operation.</summary>
+    public async Task SendAsync(ReadOnlyMemory<byte> message, CancellationToken cancellationToken = default)
+    {
         await _sendLock.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
@@ -114,10 +121,17 @@ public sealed class RelpConnection : IAsyncDisposable
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
             var stream = _stream ?? throw new InvalidOperationException("Connection is not open.");
-            var buffer = new byte[4096];
-            var count = await stream.ReadAsync(buffer, cancellationToken).ConfigureAwait(false);
-            if (count == 0) throw new IOException("Connection closed by the server.");
-            return buffer[..count];
+            var buffer = ArrayPool<byte>.Shared.Rent(4096);
+            try
+            {
+                var count = await stream.ReadAsync(buffer.AsMemory(0, buffer.Length), cancellationToken).ConfigureAwait(false);
+                if (count == 0) throw new IOException("Connection closed by the server.");
+                return buffer.AsSpan(0, count).ToArray();
+            }
+            finally
+            {
+                ArrayPool<byte>.Shared.Return(buffer);
+            }
         }
         finally
         {

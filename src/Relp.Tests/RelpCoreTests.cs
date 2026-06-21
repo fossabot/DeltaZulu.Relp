@@ -403,10 +403,7 @@ public sealed class RelpCoreTests
         var session = new RelpSession(connection);
 
         await session.OpenAsync(timeout.Token);
-        foreach (var payload in expected)
-        {
-            await session.SendMessageAsync(Encoding.UTF8.GetBytes(payload), timeout.Token);
-        }
+        await session.SendMessagesAsync(expected.Select(Encoding.UTF8.GetBytes), timeout.Token);
         await session.CloseAsync(timeout.Token);
 
         await serverTask;
