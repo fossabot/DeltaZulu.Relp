@@ -43,7 +43,7 @@ public static class RelpFrameReader
         }
 
         var commandParsed = commandToken.IsSingleSegment
-            ? RelpCommandExtensions.TryParseProtocolSpan(commandToken.FirstSpan, out command)
+            ? RelpCommandExtensions.TryParseProtocolSpan(commandToken.FirstSpan, out var command)
             : RelpCommandExtensions.TryParseProtocolSpan(commandToken.ToArray(), out command);
         if (!commandParsed)
         {
