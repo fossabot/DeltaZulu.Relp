@@ -2,7 +2,7 @@
 
 This folder contains a minimal RELP client/server pair for sending newline-delimited JSON (NDJSON/JSON Lines) payloads compressed with zstd.
 
-The examples use [`ZstdSharp.Port`](https://www.nuget.org/packages/ZstdSharp.Port/) for zstd compression/decompression.
+The examples use [`ZstdSharp.Port`](https://www.nuget.org/packages/ZstdSharp.Port/) for zstd compression/decompression. The client uses the public `RelpConnection` and `RelpSession` APIs so the example stays close to normal library usage.
 
 ## Run the server
 
@@ -10,11 +10,19 @@ The examples use [`ZstdSharp.Port`](https://www.nuget.org/packages/ZstdSharp.Por
 dotnet run --project examples/Relp.Examples.Server -- 1601
 ```
 
+The server listens on loopback by default. To bind all network interfaces for a non-local demo, pass `any` as the second argument:
+
+```bash
+dotnet run --project examples/Relp.Examples.Server -- 1601 any
+```
+
 The server accepts RELP frames, decompresses `syslog` frame payloads with zstd, and prints each JSON line to stdout as:
 
 ```text
 <ingestion timestamp>: <log>
 ```
+
+Press Ctrl+C to stop the server gracefully.
 
 ## Run the client
 

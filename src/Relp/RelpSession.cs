@@ -28,6 +28,8 @@ public sealed class RelpSession
             var response = await SendFrameAndExpectSuccessfulAckAsync(openFrame, transactionId, cancellationToken).ConfigureAwait(false);
             if (!ResponseIncludesOffer(response, "relp_version"))
             {
+                var closeTransactionId = _txId.Next();
+                await SendFrameAndExpectSuccessfulAckAsync(RelpFrameTx.FromCommand(RelpCommand.Close), closeTransactionId, cancellationToken).ConfigureAwait(false);
                 throw new InvalidOperationException("RELP server did not accept the relp_version offer.");
             }
 

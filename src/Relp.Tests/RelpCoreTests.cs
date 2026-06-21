@@ -1,4 +1,6 @@
 using System.Collections.Concurrent;
+using System.Net;
+using System.Net.Sockets;
 using System.Text;
 
 namespace Relp.Tests;
@@ -11,7 +13,7 @@ public sealed class RelpCoreTests
     {
         var frame = RelpFrameTx.FromMessage(Encoding.UTF8.GetBytes("Hello World!"));
         Assert.AreEqual(RelpCommand.Syslog, frame.Command);
-        Assert.AreEqual("0 syslog 12 Hello World!", frame.ToProtocolString());
+        Assert.AreEqual("1 syslog 12 Hello World!", frame.ToProtocolString());
     }
 
     [TestMethod]
@@ -90,6 +92,13 @@ public sealed class RelpCoreTests
     }
 
     [TestMethod]
+    public void ParserRejectsTransactionIdBelowProtocolMinimum()
+    {
+        var parser = new RelpParser();
+        Assert.ThrowsExactly<FormatException>(() => parser.Parse(Encoding.UTF8.GetBytes("0 rsp 6 200 OK\n")));
+    }
+
+    [TestMethod]
     public void TxIdExposesProtocolBoundsAndRejectsNegativeValues()
     {
 #pragma warning disable MSTEST0032 // Assertion condition is always true
@@ -145,6 +154,15 @@ public sealed class RelpCoreTests
     }
 
     [TestMethod]
+    public void FrameTxRejectsTransactionIdsOutsideProtocolBounds()
+    {
+        var frame = RelpFrameTx.FromCommand(RelpCommand.Close);
+
+        Assert.ThrowsExactly<ArgumentOutOfRangeException>(() => frame.ToByteArray(0));
+        Assert.ThrowsExactly<ArgumentOutOfRangeException>(() => frame.ToProtocolString(TxId.MaxValue + 1));
+    }
+
+    [TestMethod]
     public void TxIdBehavesLikeUnsignedBackedValue()
     {
         var txId = new TxId(42);
@@ -176,6 +194,7 @@ public sealed class RelpCoreTests
     [TestMethod]
     public void FrameRxRejectsInvalidConstructorArguments()
     {
+        Assert.ThrowsExactly<ArgumentOutOfRangeException>(() => new RelpFrameRx(0, RelpCommand.Response, 0, []));
         Assert.ThrowsExactly<ArgumentOutOfRangeException>(() => new RelpFrameRx(-1, RelpCommand.Response, 0, []));
         Assert.ThrowsExactly<ArgumentOutOfRangeException>(() => new RelpFrameRx(1, RelpCommand.Response, -1, []));
         Assert.ThrowsExactly<ArgumentException>(() => new RelpFrameRx(1, RelpCommand.Response, 2, [0x41]));
@@ -187,6 +206,17 @@ public sealed class RelpCoreTests
         Assert.ThrowsExactly<ArgumentException>(() => new RelpConnection("", 601));
         Assert.ThrowsExactly<ArgumentOutOfRangeException>(() => new RelpConnection("localhost", 0));
         Assert.ThrowsExactly<ArgumentOutOfRangeException>(() => new RelpConnection("localhost", 65_536));
+    }
+
+    [TestMethod]
+    public async Task ConnectionRejectsUseAfterDispose()
+    {
+        await using var connection = new RelpConnection("localhost", 601);
+        await connection.DisposeAsync();
+
+        await Assert.ThrowsExactlyAsync<ObjectDisposedException>(() => connection.ConnectAsync());
+        await Assert.ThrowsExactlyAsync<ObjectDisposedException>(() => connection.SendAsync([]));
+        await Assert.ThrowsExactlyAsync<ObjectDisposedException>(() => connection.ReceiveAsync());
     }
 
     [TestMethod]
@@ -242,5 +272,233 @@ public sealed class RelpCoreTests
         Assert.AreEqual(1, window.Size);
         window.RemovePending(12);
         Assert.IsFalse(window.IsPending(12));
+    }
+
+    [TestMethod]
+    public void ParserRejectsAdditionalInputAfterCompletion()
+    {
+        var parser = new RelpParser();
+        parser.Parse(Encoding.UTF8.GetBytes("2 rsp 6 200 OK\n"));
+
+        Assert.ThrowsExactly<InvalidOperationException>(() => parser.Parse((byte)'x'));
+    }
+
+    [TestMethod]
+    public void FramesDefensivelyCopyPayloadBuffers()
+    {
+        var outboundPayload = Encoding.UTF8.GetBytes("hello");
+        var outbound = RelpFrameTx.FromMessage(outboundPayload);
+        outboundPayload[0] = (byte)'j';
+        outbound.Message[1] = (byte)'a';
+
+        Assert.AreEqual("1 syslog 5 hello", outbound.ToProtocolString());
+
+        var inboundPayload = Encoding.UTF8.GetBytes("200 OK");
+        var inbound = new RelpFrameRx(1, RelpCommand.Response, inboundPayload.Length, inboundPayload);
+        inboundPayload[0] = (byte)'5';
+        inbound.Buffer[1] = (byte)'9';
+
+        Assert.AreEqual("200 OK", inbound.GetData());
+    }
+
+    [TestMethod]
+    public async Task SessionCompletesOpenSendAndCloseAgainstLoopbackServer()
+    {
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var receivedPayloads = new ConcurrentQueue<string>();
+        var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+
+        var port = ((IPEndPoint)listener.LocalEndpoint).Port;
+        var serverTask = RunSingleClientRelpServerAsync(listener, receivedPayloads, timeout.Token);
+
+        await using var connection = new RelpConnection(IPAddress.Loopback.ToString(), port);
+        await connection.ConnectAsync(timeout.Token);
+        var session = new RelpSession(connection);
+
+        await session.OpenAsync(timeout.Token);
+        await session.SendMessageAsync(Encoding.UTF8.GetBytes("integration payload"), timeout.Token);
+        await session.SendMessageAsync(Encoding.UTF8.GetBytes("second payload"), timeout.Token);
+        await session.CloseAsync(timeout.Token);
+
+        await serverTask;
+        CollectionAssert.AreEqual(
+            new[] { "integration payload", "second payload" },
+            receivedPayloads.ToArray());
+        Assert.HasCount(2, receivedPayloads);
+    }
+
+    [TestMethod]
+    public async Task SessionSendsCloseWhenOpenResponseOmitsRelpVersionOffer()
+    {
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var receivedPayloads = new ConcurrentQueue<string>();
+        var observedCommands = new ConcurrentQueue<RelpCommand>();
+        var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+
+        var port = ((IPEndPoint)listener.LocalEndpoint).Port;
+        var serverTask = RunSingleClientRelpServerAsync(
+            listener,
+            receivedPayloads,
+            timeout.Token,
+            openResponse: "200 OK",
+            observedCommands: observedCommands);
+
+        await using var connection = new RelpConnection(IPAddress.Loopback.ToString(), port);
+        await connection.ConnectAsync(timeout.Token);
+        var session = new RelpSession(connection);
+
+        await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => session.OpenAsync(timeout.Token));
+
+        await serverTask;
+        CollectionAssert.AreEqual(
+            new[] { RelpCommand.Open, RelpCommand.Close },
+            observedCommands.ToArray());
+        Assert.IsEmpty(receivedPayloads);
+        Assert.IsFalse(session.IsActive);
+    }
+
+    [TestMethod]
+    public async Task SessionTransmitsLongPayloadAgainstLoopbackServer()
+    {
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var receivedPayloads = new ConcurrentQueue<string>();
+        var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+
+        var port = ((IPEndPoint)listener.LocalEndpoint).Port;
+        var serverTask = RunSingleClientRelpServerAsync(listener, receivedPayloads, timeout.Token);
+        var payload = "testmessage" + new string('7', 131_072 - "testmessage".Length);
+
+        await using var connection = new RelpConnection(IPAddress.Loopback.ToString(), port);
+        await connection.ConnectAsync(timeout.Token);
+        var session = new RelpSession(connection);
+
+        await session.OpenAsync(timeout.Token);
+        await session.SendMessageAsync(Encoding.UTF8.GetBytes(payload), timeout.Token);
+        await session.CloseAsync(timeout.Token);
+
+        await serverTask;
+        Assert.IsTrue(receivedPayloads.TryDequeue(out var received));
+        Assert.AreEqual(payload.Length, received.Length);
+        Assert.AreEqual(payload, received);
+        Assert.IsEmpty(receivedPayloads);
+    }
+
+    [TestMethod]
+    public async Task SessionTransmitsMessageSequenceAgainstLoopbackServer()
+    {
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var receivedPayloads = new ConcurrentQueue<string>();
+        var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+
+        var port = ((IPEndPoint)listener.LocalEndpoint).Port;
+        var serverTask = RunSingleClientRelpServerAsync(listener, receivedPayloads, timeout.Token);
+        var expected = Enumerable.Range(1, 128).Select(value => value.ToString("D8")).ToArray();
+
+        await using var connection = new RelpConnection(IPAddress.Loopback.ToString(), port);
+        await connection.ConnectAsync(timeout.Token);
+        var session = new RelpSession(connection);
+
+        await session.OpenAsync(timeout.Token);
+        foreach (var payload in expected)
+        {
+            await session.SendMessageAsync(Encoding.UTF8.GetBytes(payload), timeout.Token);
+        }
+        await session.CloseAsync(timeout.Token);
+
+        await serverTask;
+        CollectionAssert.AreEqual(expected, receivedPayloads.ToArray());
+        Assert.HasCount(expected.Length, receivedPayloads);
+    }
+
+    [TestMethod]
+    public async Task ConnectionReportsUnavailableReceiverOnConnect()
+    {
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        var port = ((IPEndPoint)listener.LocalEndpoint).Port;
+        listener.Stop();
+
+        await using var connection = new RelpConnection(IPAddress.Loopback.ToString(), port);
+
+        await Assert.ThrowsExactlyAsync<SocketException>(() => connection.ConnectAsync(timeout.Token));
+    }
+
+    private static async Task RunSingleClientRelpServerAsync(
+        TcpListener listener,
+        ConcurrentQueue<string> receivedPayloads,
+        CancellationToken cancellationToken,
+        string openResponse = "200 OK\nrelp_version=0\ncommands=syslog",
+        ConcurrentQueue<RelpCommand>? observedCommands = null)
+    {
+        try
+        {
+            using var client = await listener.AcceptTcpClientAsync(cancellationToken);
+            await using var stream = client.GetStream();
+            var parser = new RelpParser();
+            var pending = Array.Empty<byte>();
+            var buffer = new byte[4096];
+
+            while (!cancellationToken.IsCancellationRequested)
+            {
+                if (pending.Length > 0)
+                {
+                    parser.Parse(pending);
+                    pending = Array.Empty<byte>();
+                }
+
+                while (!parser.IsComplete)
+                {
+                    var read = await stream.ReadAsync(buffer, cancellationToken);
+                    if (read == 0)
+                    {
+                        return;
+                    }
+
+                    parser.Parse(buffer.AsSpan(0, read));
+                }
+
+                pending = parser.RemainingBytes;
+                var frame = parser.ToFrame();
+                parser = new RelpParser();
+                observedCommands?.Enqueue(frame.Command);
+
+                switch (frame.Command)
+                {
+                    case RelpCommand.Open:
+                        await SendResponseAsync(stream, frame.TransactionId, openResponse, cancellationToken);
+                        break;
+                    case RelpCommand.Syslog:
+                        receivedPayloads.Enqueue(Encoding.UTF8.GetString(frame.Buffer));
+                        await SendResponseAsync(stream, frame.TransactionId, "200 OK", cancellationToken);
+                        break;
+                    case RelpCommand.Close:
+                        await SendResponseAsync(stream, frame.TransactionId, "200 OK", cancellationToken);
+                        return;
+                    default:
+                        await SendResponseAsync(stream, frame.TransactionId, "500 unsupported command", cancellationToken);
+                        break;
+                }
+            }
+        }
+        finally
+        {
+            listener.Stop();
+        }
+    }
+
+    private static async Task SendResponseAsync(
+        NetworkStream stream,
+        int transactionId,
+        string message,
+        CancellationToken cancellationToken)
+    {
+        var response = RelpFrameTx.FromCommandAndMessage(RelpCommand.Response, Encoding.UTF8.GetBytes(message));
+        await stream.WriteAsync(response.ToByteArray(transactionId), cancellationToken);
+        await stream.FlushAsync(cancellationToken);
     }
 }

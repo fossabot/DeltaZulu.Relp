@@ -20,7 +20,7 @@ public sealed class RelpParser
     {
         if (IsComplete)
         {
-            return;
+            throw new InvalidOperationException("Parser has already completed a RELP frame. Create a new parser for additional frames and pass RemainingBytes first.");
         }
 
         foreach (var value in bytes)
@@ -58,9 +58,9 @@ public sealed class RelpParser
         }
 
         var transactionText = Encoding.ASCII.GetString(_buffer.GetRange(0, firstSpace).ToArray());
-        if (!int.TryParse(transactionText, out var transactionId) || transactionId < 0 || transactionId > TxId.MaxValue)
+        if (!int.TryParse(transactionText, out var transactionId) || transactionId < TxId.MinValue || transactionId > TxId.MaxValue)
         {
-            throw new FormatException("Negative or invalid transaction id.");
+            throw new FormatException($"RELP transaction id must be between {TxId.MinValue} and {TxId.MaxValue}.");
         }
 
         var commandText = Encoding.ASCII.GetString(_buffer.GetRange(firstSpace + 1, secondSpace - firstSpace - 1).ToArray());

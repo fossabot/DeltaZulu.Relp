@@ -5,17 +5,40 @@ using Relp;
 using ZstdSharp;
 
 var port = args.Length > 0 && int.TryParse(args[0], out var parsedPort) ? parsedPort : 1601;
-var listener = new TcpListener(IPAddress.Any, port);
-listener.Start();
-Console.Error.WriteLine($"RELP zstd NDJSON example server listening on 0.0.0.0:{port}");
+var bindAddress = args.ElementAtOrDefault(1)?.Equals("any", StringComparison.OrdinalIgnoreCase) == true
+    ? IPAddress.Any
+    : IPAddress.Loopback;
+using var cts = new CancellationTokenSource();
 
-while (true)
+Console.CancelKeyPress += (_, eventArgs) =>
 {
-    var client = await listener.AcceptTcpClientAsync();
-    _ = Task.Run(() => HandleClientAsync(client));
+    eventArgs.Cancel = true;
+    cts.Cancel();
+};
+
+var listener = new TcpListener(bindAddress, port);
+listener.Start();
+Console.Error.WriteLine($"RELP zstd NDJSON example server listening on {bindAddress}:{port}");
+Console.Error.WriteLine("Press Ctrl+C to stop.");
+
+try
+{
+    while (!cts.IsCancellationRequested)
+    {
+        var client = await listener.AcceptTcpClientAsync(cts.Token);
+        _ = Task.Run(() => HandleClientAsync(client, cts.Token), cts.Token);
+    }
+}
+catch (OperationCanceledException) when (cts.IsCancellationRequested)
+{
+    // Graceful shutdown requested by Ctrl+C.
+}
+finally
+{
+    listener.Stop();
 }
 
-static async Task HandleClientAsync(TcpClient client)
+static async Task HandleClientAsync(TcpClient client, CancellationToken cancellationToken)
 {
     using var clientRegistration = client;
     await using var stream = client.GetStream();
@@ -25,7 +48,7 @@ static async Task HandleClientAsync(TcpClient client)
     var pending = Array.Empty<byte>();
     var buffer = new byte[4096];
 
-    while (true)
+    while (!cancellationToken.IsCancellationRequested)
     {
         if (pending.Length > 0)
         {
@@ -35,7 +58,7 @@ static async Task HandleClientAsync(TcpClient client)
 
         while (!parser.IsComplete)
         {
-            var read = await stream.ReadAsync(buffer);
+            var read = await stream.ReadAsync(buffer, cancellationToken);
             if (read == 0) return;
             parser.Parse(buffer.AsSpan(0, read));
         }
@@ -47,17 +70,17 @@ static async Task HandleClientAsync(TcpClient client)
         switch (frame.Command)
         {
             case RelpCommand.Open:
-                await SendAckAsync(stream, frame.TransactionId, "200 OK\nrelp_version=0\ncommands=syslog");
+                await SendAckAsync(stream, frame.TransactionId, "200 OK\nrelp_version=0\ncommands=syslog", cancellationToken);
                 break;
             case RelpCommand.Syslog:
                 PrintCompressedJsonLines(decompressor, frame.Buffer);
-                await SendAckAsync(stream, frame.TransactionId, "200 OK");
+                await SendAckAsync(stream, frame.TransactionId, "200 OK", cancellationToken);
                 break;
             case RelpCommand.Close:
-                await SendAckAsync(stream, frame.TransactionId, "200 OK");
+                await SendAckAsync(stream, frame.TransactionId, "200 OK", cancellationToken);
                 return;
             default:
-                await SendAckAsync(stream, frame.TransactionId, "500 unsupported command");
+                await SendAckAsync(stream, frame.TransactionId, "500 unsupported command", cancellationToken);
                 break;
         }
     }
@@ -72,9 +95,9 @@ static void PrintCompressedJsonLines(Decompressor decompressor, byte[] compresse
     }
 }
 
-static async Task SendAckAsync(NetworkStream stream, int transactionId, string message)
+static async Task SendAckAsync(NetworkStream stream, int transactionId, string message, CancellationToken cancellationToken)
 {
     var frame = RelpFrameTx.FromCommandAndMessage(RelpCommand.Response, Encoding.UTF8.GetBytes(message));
-    await stream.WriteAsync(frame.ToByteArray(transactionId));
-    await stream.FlushAsync();
+    await stream.WriteAsync(frame.ToByteArray(transactionId), cancellationToken);
+    await stream.FlushAsync(cancellationToken);
 }

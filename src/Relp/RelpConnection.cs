@@ -12,6 +12,7 @@ public sealed class RelpConnection : IAsyncDisposable
     private readonly SemaphoreSlim _receiveLock = new(1, 1);
     private TcpClient? _client;
     private Stream? _stream;
+    private bool _disposed;
 
     public RelpConnection(string host, int port, bool useTls = false, X509CertificateCollection? clientCertificates = null)
     {
@@ -45,6 +46,7 @@ public sealed class RelpConnection : IAsyncDisposable
             {
                 throw new InvalidOperationException("Connection is already open.");
             }
+            ObjectDisposedException.ThrowIf(_disposed, this);
 
             var client = new TcpClient();
             try
@@ -83,9 +85,10 @@ public sealed class RelpConnection : IAsyncDisposable
         await _sendLock.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            if (_stream is null) throw new InvalidOperationException("Connection is not open.");
-            await _stream.WriteAsync(message, cancellationToken).ConfigureAwait(false);
-            await _stream.FlushAsync(cancellationToken).ConfigureAwait(false);
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            var stream = _stream ?? throw new InvalidOperationException("Connection is not open.");
+            await stream.WriteAsync(message, cancellationToken).ConfigureAwait(false);
+            await stream.FlushAsync(cancellationToken).ConfigureAwait(false);
         }
         finally
         {
@@ -98,9 +101,10 @@ public sealed class RelpConnection : IAsyncDisposable
         await _receiveLock.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            if (_stream is null) throw new InvalidOperationException("Connection is not open.");
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            var stream = _stream ?? throw new InvalidOperationException("Connection is not open.");
             var buffer = new byte[4096];
-            var count = await _stream.ReadAsync(buffer, cancellationToken).ConfigureAwait(false);
+            var count = await stream.ReadAsync(buffer, cancellationToken).ConfigureAwait(false);
             if (count == 0) throw new IOException("Connection closed by the server.");
             return buffer[..count];
         }
@@ -113,19 +117,30 @@ public sealed class RelpConnection : IAsyncDisposable
     public async ValueTask DisposeAsync()
     {
         await _connectLock.WaitAsync().ConfigureAwait(false);
+        Stream? stream;
+        TcpClient? client;
         try
         {
-            if (_stream is not null) await _stream.DisposeAsync().ConfigureAwait(false);
-            _client?.Dispose();
+            if (_disposed)
+            {
+                return;
+            }
+
+            _disposed = true;
+            stream = _stream;
+            client = _client;
             _stream = null;
             _client = null;
         }
         finally
         {
             _connectLock.Release();
-            _connectLock.Dispose();
-            _sendLock.Dispose();
-            _receiveLock.Dispose();
         }
+
+        // Disposing the stream outside the connection lock lets a blocked read or
+        // write unblock without DisposeAsync waiting forever on the send/receive
+        // semaphores held by those operations.
+        if (stream is not null) await stream.DisposeAsync().ConfigureAwait(false);
+        client?.Dispose();
     }
 }

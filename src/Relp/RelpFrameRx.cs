@@ -5,12 +5,14 @@ namespace Relp;
 /// <summary>A received RELP frame.</summary>
 public sealed class RelpFrameRx
 {
+    private readonly byte[] _buffer;
+
     public RelpFrameRx(int transactionId, RelpCommand command, int length, byte[] buffer)
     {
         ArgumentNullException.ThrowIfNull(buffer);
-        if (transactionId is < 0 or > TxId.MaxValue)
+        if (transactionId is < TxId.MinValue or > TxId.MaxValue)
         {
-            throw new ArgumentOutOfRangeException(nameof(transactionId), $"RELP transaction id must be between 0 and {TxId.MaxValue}.");
+            throw new ArgumentOutOfRangeException(nameof(transactionId), $"RELP transaction id must be between {TxId.MinValue} and {TxId.MaxValue}.");
         }
 
         if (length < 0)
@@ -26,13 +28,13 @@ public sealed class RelpFrameRx
         TransactionId = transactionId;
         Command = command;
         Length = length;
-        Buffer = buffer;
+        _buffer = buffer.ToArray();
     }
 
     public int TransactionId { get; }
     public RelpCommand Command { get; }
     public int Length { get; }
-    public byte[] Buffer { get; }
+    public byte[] Buffer => _buffer.ToArray();
 
     public int GetResponseCode()
     {
@@ -45,5 +47,5 @@ public sealed class RelpFrameRx
         return code;
     }
 
-    public string GetData() => Encoding.UTF8.GetString(Buffer);
+    public string GetData() => Encoding.UTF8.GetString(_buffer);
 }
