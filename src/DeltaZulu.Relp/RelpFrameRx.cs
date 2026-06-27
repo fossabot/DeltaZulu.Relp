@@ -1,6 +1,6 @@
 using System.Text;
 
-namespace Relp;
+namespace DeltaZulu.Relp;
 
 /// <summary>A received RELP frame.</summary>
 public sealed class RelpFrameRx

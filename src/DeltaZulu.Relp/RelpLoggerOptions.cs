@@ -2,7 +2,7 @@ using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using Microsoft.Extensions.Logging;
 
-namespace Relp;
+namespace DeltaZulu.Relp;
 
 /// <summary>Configures the RELP sink for Microsoft.Extensions.Logging.</summary>
 public sealed class RelpLoggerOptions

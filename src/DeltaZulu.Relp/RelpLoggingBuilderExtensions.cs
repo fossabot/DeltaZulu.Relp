@@ -1,7 +1,8 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using DeltaZulu.Relp;
 
-namespace Relp;
+namespace DeltaZulu.Relp;
 
 /// <summary>Registers RELP as a Microsoft.Extensions.Logging provider.</summary>
 public static class RelpLoggingBuilderExtensions

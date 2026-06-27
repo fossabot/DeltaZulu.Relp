@@ -1,6 +1,6 @@
 using System.Collections.Concurrent;
 
-namespace Relp;
+namespace DeltaZulu.Relp;
 
 /// <summary>Represents a RELP API type.</summary>
 public sealed class RelpBatch

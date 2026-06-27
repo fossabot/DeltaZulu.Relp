@@ -1,6 +1,0 @@
-<Solution>
-  <Project Path="src/Relp/Relp.csproj" />
-  <Project Path="src/Relp.Tests/Relp.Tests.csproj" />
-  <Project Path="examples/Relp.Examples.Client/Relp.Examples.Client.csproj" />
-  <Project Path="examples/Relp.Examples.Server/Relp.Examples.Server.csproj" />
-</Solution>

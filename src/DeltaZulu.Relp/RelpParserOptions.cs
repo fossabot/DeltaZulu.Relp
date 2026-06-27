@@ -1,4 +1,4 @@
-namespace Relp;
+namespace DeltaZulu.Relp;
 
 /// <summary>Configures RELP frame parser limits.</summary>
 public readonly record struct RelpParserOptions

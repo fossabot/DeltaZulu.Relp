@@ -1,7 +1,7 @@
 using System.Reflection;
 using System.Text;
 
-namespace Relp;
+namespace DeltaZulu.Relp;
 
 /// <summary>Client-side RELP session helper that waits for application-level acknowledgements.</summary>
 public sealed class RelpSession

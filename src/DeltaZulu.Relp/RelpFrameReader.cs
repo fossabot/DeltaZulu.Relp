@@ -2,7 +2,7 @@ using System.Buffers;
 using System.Buffers.Text;
 using System.IO.Pipelines;
 
-namespace Relp;
+namespace DeltaZulu.Relp;
 
 /// <summary>Reads RELP frames from buffered byte sequences.</summary>
 public static class RelpFrameReader

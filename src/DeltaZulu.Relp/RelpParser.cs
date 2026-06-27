@@ -1,6 +1,6 @@
 using System.Buffers;
 
-namespace Relp;
+namespace DeltaZulu.Relp;
 
 /// <summary>Incremental parser for octet-counted RELP frames.</summary>
 public sealed class RelpParser

@@ -1,6 +1,6 @@
 using System.Collections.Concurrent;
 
-namespace Relp;
+namespace DeltaZulu.Relp;
 
 /// <summary>Tracks pending RELP transactions in the client window.</summary>
 public sealed class RelpWindow

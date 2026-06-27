@@ -1,6 +1,6 @@
-# RELP.Net
+# DeltaZulu.Relp
 
-RELP.Net is a .NET implementation of the client-side pieces of the RELP
+DeltaZulu.Relp is a .NET implementation of the client-side pieces of the RELP
 (Reliable Event Logging Protocol) framing and acknowledgement flow. The library
 focuses on small, composable types for encoding frames, parsing responses,
 managing transaction identifiers, and running a simple acknowledged RELP client
@@ -10,12 +10,12 @@ session.
 
 | Project | Purpose |
 | --- | --- |
-| `src/Relp/Relp.csproj` | Core RELP library. |
-| `src/Relp.Tests/Relp.Tests.csproj` | MSTest coverage for frame formatting, parsing, identifiers, and core validation. |
-| `examples/Relp.Examples.Server/Relp.Examples.Server.csproj` | Minimal RELP server that accepts zstd-compressed NDJSON syslog payloads. |
-| `examples/Relp.Examples.Client/Relp.Examples.Client.csproj` | Minimal RELP client that sends zstd-compressed NDJSON syslog payloads. |
+| `src/DeltaZulu.Relp/DeltaZulu.Relp.csproj` | Core RELP library. |
+| `src/DeltaZulu.Relp.Tests/DeltaZulu.Relp.Tests.csproj` | MSTest coverage for frame formatting, parsing, identifiers, and core validation. |
+| `examples/DeltaZulu.Relp.Examples.Server/DeltaZulu.Relp.Examples.Server.csproj` | Minimal RELP server that accepts zstd-compressed NDJSON syslog payloads. |
+| `examples/DeltaZulu.Relp.Examples.Client/DeltaZulu.Relp.Examples.Client.csproj` | Minimal RELP client that sends zstd-compressed NDJSON syslog payloads. |
 
-The solution file is `Relp.slnx` at the repository root and includes the
+The solution file is `DeltaZulu.Relp.slnx` at the repository root and includes the
 library, tests, and example projects.
 
 ## Requirements
@@ -25,16 +25,16 @@ library, tests, and example projects.
 
 The example projects use
 [`ZstdSharp.Port`](https://www.nuget.org/packages/ZstdSharp.Port/) for payload
-compression. The core `Relp` library does not depend on zstd.
+compression. The core `DeltaZulu.Relp` library does not depend on zstd.
 
 ## Build and test
 
 From the repository root:
 
 ```bash
-dotnet restore Relp.slnx
-dotnet build Relp.slnx
-dotnet test Relp.slnx --no-build
+dotnet restore DeltaZulu.Relp.slnx
+dotnet build DeltaZulu.Relp.slnx
+dotnet test DeltaZulu.Relp.slnx --no-build
 ```
 
 The same restore/build/test sequence runs in GitHub Actions for pushes to the
@@ -44,7 +44,7 @@ default branches and for pull requests.
 
 ```csharp
 using System.Text;
-using Relp;
+using DeltaZulu.Relp;
 
 await using var connection = new RelpConnection("127.0.0.1", 1601);
 await connection.ConnectAsync();
@@ -74,7 +74,7 @@ pipeline:
 ```csharp
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
-using Relp;
+using DeltaZulu.Relp;
 
 var services = new ServiceCollection();
 services.AddLogging(builder => {
@@ -96,7 +96,7 @@ structured payload format.
 ## Examples
 
 The examples demonstrate zstd-compressed newline-delimited JSON (NDJSON/JSON
-Lines) sent in RELP `syslog` frames. RELP.Net currently uses a
+Lines) sent in RELP `syslog` frames. DeltaZulu.RELP currently uses a
 single-flight session model: it sends one frame and waits for its `rsp 200`
 acknowledgement before sending the next frame. The parser also fails closed when
 a frame exceeds the configured maximum frame length (1 MiB by default) or a
@@ -105,13 +105,13 @@ header exceeds the configured maximum header length (4 KiB by default).
 Start the server:
 
 ```bash
-dotnet run --project examples/Relp.Examples.Server -- 1601
+dotnet run --project examples/DeltaZulu.Relp.Examples.Server -- 1601
 ```
 
 In another terminal, run the client:
 
 ```bash
-dotnet run --project examples/Relp.Examples.Client -- 127.0.0.1 1601 5
+dotnet run --project examples/DeltaZulu.Relp.Examples.Client -- 127.0.0.1 1601 5
 ```
 
 The client arguments are:
@@ -124,7 +124,7 @@ The server binds to loopback by default for local demonstration. Pass a second
 argument of `any` to bind to all interfaces:
 
 ```bash
-dotnet run --project examples/Relp.Examples.Server -- 1601 any
+dotnet run --project examples/DeltaZulu.Relp.Examples.Server -- 1601 any
 ```
 
 ## Notes for contributors
@@ -132,4 +132,4 @@ dotnet run --project examples/Relp.Examples.Server -- 1601 any
 - Keep optional payload encodings, such as zstd, out of the core library unless
   they become explicit library features.
 - Keep examples buildable with the solution so API changes are caught early.
-- Prefer adding tests in `src/Relp.Tests` for protocol behavior changes.
+- Prefer adding tests in `src/DeltaZulu.Relp.Tests` for protocol behavior changes.

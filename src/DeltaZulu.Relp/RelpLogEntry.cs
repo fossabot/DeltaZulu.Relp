@@ -1,6 +1,6 @@
 using Microsoft.Extensions.Logging;
 
-namespace Relp;
+namespace DeltaZulu.Relp;
 
 /// <summary>Represents a formatted Microsoft.Extensions.Logging event ready for RELP serialization.</summary>
 public sealed record RelpLogEntry(

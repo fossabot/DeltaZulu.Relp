@@ -4,7 +4,7 @@ using System.Net.Security;
 using System.Net.Sockets;
 using System.Security.Cryptography.X509Certificates;
 
-namespace Relp;
+namespace DeltaZulu.Relp;
 
 /// <summary>TCP/TLS transport for RELP clients.</summary>
 public sealed class RelpConnection : IAsyncDisposable

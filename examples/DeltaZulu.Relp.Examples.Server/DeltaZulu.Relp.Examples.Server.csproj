@@ -6,7 +6,7 @@
     <Nullable>enable</Nullable>
   </PropertyGroup>
   <ItemGroup>
-    <ProjectReference Include="..\..\src\Relp\Relp.csproj" />
+    <ProjectReference Include="..\..\src\DeltaZulu.Relp\DeltaZulu.Relp.csproj" />
     <PackageReference Include="ZstdSharp.Port" Version="0.8.8" />
   </ItemGroup>
 </Project>

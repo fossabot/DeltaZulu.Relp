@@ -1,4 +1,4 @@
-namespace Relp;
+namespace DeltaZulu.Relp;
 
 /// <summary>Generates monotonically increasing request identifiers.</summary>
 public sealed class RequestId

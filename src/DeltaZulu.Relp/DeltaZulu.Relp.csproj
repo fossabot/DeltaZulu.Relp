@@ -4,7 +4,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
-    <PackageId>Relp</PackageId>
+    <PackageId>DeltaZulu.Relp</PackageId>
     <Authors>RELP.Net contributors</Authors>
     <Description>A .NET client-side RELP (Reliable Event Logging Protocol) library.</Description>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>

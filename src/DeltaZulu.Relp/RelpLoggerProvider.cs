@@ -1,7 +1,7 @@
 using System.Threading.Channels;
 using Microsoft.Extensions.Logging;
 
-namespace Relp;
+namespace DeltaZulu.Relp;
 
 /// <summary>Provides a Microsoft.Extensions.Logging sink that forwards log events over RELP.</summary>
 public sealed class RelpLoggerProvider : ILoggerProvider, ISupportExternalScope

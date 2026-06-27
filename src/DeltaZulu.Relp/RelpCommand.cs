@@ -1,4 +1,4 @@
-namespace Relp;
+namespace DeltaZulu.Relp;
 
 /// <summary>RELP protocol command names.</summary>
 public enum RelpCommand

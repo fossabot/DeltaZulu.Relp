@@ -19,10 +19,10 @@ jobs:
           dotnet-version: '10.0.x'
 
       - name: Restore
-        run: dotnet restore Relp.slnx
+        run: dotnet restore DeltaZulu.Relp.slnx
 
       - name: Build
-        run: dotnet build Relp.slnx --configuration Release --no-restore
+        run: dotnet build DeltaZulu.Relp.slnx --configuration Release --no-restore
 
       - name: Test
-        run: dotnet test Relp.slnx --configuration Release --no-build --logger trx
+        run: dotnet test DeltaZulu.Relp.slnx --configuration Release --no-build --logger trx

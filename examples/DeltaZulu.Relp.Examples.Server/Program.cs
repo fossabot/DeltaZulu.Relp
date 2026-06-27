@@ -3,7 +3,7 @@ using System.Net.Sockets;
 using System.Text;
 using ZstdSharp;
 
-namespace Relp.Examples.Server
+namespace DeltaZulu.Relp.Examples.Server
 {
     internal static class Program
     {

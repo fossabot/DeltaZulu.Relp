@@ -5,7 +5,7 @@ using System.Net;
 using System.Net.Sockets;
 using System.Text;
 
-namespace Relp.Tests;
+namespace DeltaZulu.Relp.Tests;
 
 [TestClass]
 public sealed class RelpCoreTests

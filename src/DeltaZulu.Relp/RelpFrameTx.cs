@@ -1,7 +1,7 @@
 using System.Buffers.Text;
 using System.Text;
 
-namespace Relp;
+namespace DeltaZulu.Relp;
 
 /// <summary>A RELP frame ready for transmission.</summary>
 public sealed class RelpFrameTx

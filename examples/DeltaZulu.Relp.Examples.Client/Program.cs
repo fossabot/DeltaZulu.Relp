@@ -2,7 +2,7 @@ using System.Text;
 using System.Text.Json;
 using ZstdSharp;
 
-namespace Relp.Examples.Client
+namespace DeltaZulu.Relp.Examples.Client
 {
     internal static class Program
     {

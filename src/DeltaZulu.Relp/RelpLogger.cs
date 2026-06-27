@@ -1,6 +1,6 @@
 using Microsoft.Extensions.Logging;
 
-namespace Relp;
+namespace DeltaZulu.Relp;
 
 internal sealed class RelpLogger(string categoryName, RelpLoggerProvider provider) : ILogger
 {

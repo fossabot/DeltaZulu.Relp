@@ -1,4 +1,4 @@
-namespace Relp;
+namespace DeltaZulu.Relp;
 
 /// <summary>Represents a RELP API type.</summary>
 public sealed class TxId : IComparable, IComparable<TxId>, IEquatable<TxId>, IFormattable
