@@ -1,4 +1,6 @@
 # DeltaZulu.Relp
+[![FOSSA Status](https://app.fossa.com/api/projects/git%2Bgithub.com%2FDeltaZulu-OU%2FDeltaZulu.Relp.svg?type=shield)](https://app.fossa.com/projects/git%2Bgithub.com%2FDeltaZulu-OU%2FDeltaZulu.Relp?ref=badge_shield)
+
 
 DeltaZulu.Relp is a .NET implementation of the client-side pieces of the RELP
 (Reliable Event Logging Protocol) framing and acknowledgement flow. The library
@@ -133,3 +135,7 @@ dotnet run --project examples/DeltaZulu.Relp.Examples.Server -- 1601 any
   they become explicit library features.
 - Keep examples buildable with the solution so API changes are caught early.
 - Prefer adding tests in `src/DeltaZulu.Relp.Tests` for protocol behavior changes.
+
+
+## License
+[![FOSSA Status](https://app.fossa.com/api/projects/git%2Bgithub.com%2FDeltaZulu-OU%2FDeltaZulu.Relp.svg?type=large)](https://app.fossa.com/projects/git%2Bgithub.com%2FDeltaZulu-OU%2FDeltaZulu.Relp?ref=badge_large)
